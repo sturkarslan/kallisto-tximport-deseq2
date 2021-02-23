@@ -1,0 +1,296 @@
+---
+title: "kallisto-tximport-DESeq2"
+author: "Serdar Turkarslan"
+date: "11/06/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library('tximport')
+library('rhdf5')
+library("DESeq2")
+library('DT')
+library('tictoc')
+library('apeglm')
+library('viridis')
+library('tidyverse')
+library('Cairo')
+source('code/import_kallisto2DESeq.R')
+source('code/import_kallisto2DESeq.R')
+source('code/create_conditions.R')
+source('code/deg_analysis.R')
+source('code/volcano_plot.R')
+source('code/create_DEG_matrix.R')
+source('code/plot_pca.R')
+source('code/plot_topn_heatmap.R')
+Sys.setenv("DISPLAY"=":0.0")
+```
+
+## Load kallisto counts for 3H11.
+<p>Get list of abundance files from kallisto results and load into DESEq</p>
+```{r echo=TRUE, message=FALSE, warning=TRUE,results='hide'}
+if(fs::is_file("data/deseq_data_3H11.RDS")){
+   cat("\t DESEq2 result data exists, loading.. \n")
+   deseq_data_3h11 <- readRDS('data/deseq_data_3H11.RDS')
+ }else{
+   cat("\t DESEq2 result data does not exist, starting analysis.. \n")
+   deseq_data_3h11 <- import_kallisto2DESeq(org = "3H11")
+   saveRDS(deseq_data_3h11, file = "data/deseq_data_3H11.RDS")
+ }
+datatable(deseq_data_3h11$meta_data, caption = "Meta-data information")
+```
+
+## Load kallisto counts for R12.
+<p>Get list of abundance files from kallisto results and load into DESEq</p>
+```{r echo=TRUE, message=FALSE, warning=TRUE,results='hide'}
+if(fs::is_file("data/deseq_data_R12.RDS")){
+   cat("\t DESEq2 result data exists for R12, loading.. \n")
+   deseq_data_r12 <- readRDS('data/deseq_data_R12.RDS')
+ }else{
+   cat("\t DESEq2 result data does not exist, starting analysis.. \n")
+   deseq_data_r12 <- import_kallisto2DESeq(org = "R12")
+   saveRDS(deseq_data_r12, file = "data/deseq_data_R12.RDS")
+ }
+datatable(deseq_data_r12$meta_data, caption = "Meta-data information")
+```
+
+
+## Create comparison conditions {.tabset}
+Create conditions for differential expression analysis {.tabset}
+```{r echo=TRUE, message=FALSE, warning=FALSE,results='hide'}
+conditions.3h11 <- create_conditions(org="3H11")
+conditions.r12 <- create_conditions(org="R12")
+
+```
+
+
+### DEG analysis for Dv
+```{r echo=TRUE, message=FALSE,warning=FALSE,results='hide'}
+cat("Started DEG analysis...\n")
+
+org = "3H11"
+for(condition in conditions.3h11){
+   degs.file <- paste("output/", org, "/DEG_tables_svalues/",condition,".txt", sep="")
+   degp.file <- paste("output/", org, "/DEG_tables_pvalues/",condition,".txt", sep="")
+   ## s-value analysis
+   if(fs::is_file(degs.file)){
+      cat("\t DEG analysis for ", condition, "exists, skipping \n")
+   }else{
+      cat("\t DEG analysis for ", condition, "does NOT exists, continuing \n")
+      deg_analysis(dds=deseq_data_3h11$dds, condition=condition, lfc=1, write2file=T, org = org, ptest=F)
+   }
+   
+   ## p-value analysis
+   if(fs::is_file(degp.file)){
+      cat("\t DEG analysis for ", condition, "exists, skipping \n")
+   }else{
+      cat("\t DEG analysis for ", condition, "does NOT exists, continuing \n")
+      deg_analysis(dds=deseq_data_3h11$dds, condition=condition, lfc=1, write2file=T, org = org, ptest=T)
+   }
+}
+```
+<p>DEG Results for all conditions are [here](`r paste("output/", org, "/DEG_tables_svalues/", sep="")`)</p>
+
+
+#### Volcano plots
+```{r echo=TRUE,message=FALSE,warning=FALSE,results='hide'}
+cat("Plotting volcano plots.\n")
+org = "3H11"
+rerun = FALSE
+for(condition in conditions.3h11){
+   pdfs.file <- paste("output/",org,"/volcano_plots_svalues/",condition,"_volcano.pdf", sep="")
+   pdfp.file <- paste("output/",org,"/volcano_plots_pvalues/",condition,"_volcano.pdf", sep="")
+   
+   ## volcano plot for s-values
+   if(fs::is_file(pdfs.file) & rerun==FALSE){
+      cat("\t Volcano plot for ", condition, " for s-value exists, skipping \n")
+   }else{
+      cat("\t Volcano plot for ", condition, " for s-value does NOT exists, continuing \n")
+      pdf(file=pdfs.file)
+      volcano_plot(condition = condition, org=org, lfc=1, svalue=0.005,ptest=F)
+      dev.off()
+   }
+   
+   ## volcano plot for p-values
+   if(fs::is_file(pdfp.file) & rerun==FALSE){
+      cat("\t Volcano plot for ", condition, " for p-value exists, skipping \n")
+   }else{
+      cat("\t Volcano plot for ", condition, " for p-value does NOT exists, continuing \n")
+      pdf(file=pdfp.file)
+      volcano_plot(condition = condition, org=org, lfc=1, svalue=0.005,ptest=T,pvalue=0.05)
+      dev.off()
+   }
+}
+```
+<p>Volcano plots for all conditions are [here](`r paste("output/", org, "/volcano_plots_svalues/", sep="")`)</p>
+
+
+#### DEG Matrix
+```{r echo=TRUE,dev=c('png'),results='hide'}
+##### 4. create DEG matrix and write results into a file ####
+org="3H11"
+
+## s-value matrix
+DEG.matrix.s <- create_DEG_matrix(org = org, ptest=F, svalue=0.005,dds=deseq_data_3h11 )
+write.table(DEG.matrix.s$matrix, file=paste("output/",org,"/DEG_matrix_svalue.txt", sep=""), sep="\t")
+write.table(DEG.matrix.s$updown, file=paste("output/",org,"/DEG_matrix_up_down_svalues.txt", sep=""), sep="\t")
+pheatmap(mat=DEG.matrix.s$matrix,
+         cluster_rows = F, 
+         cluster_cols = F, 
+         display_numbers = T,
+         number_format = "%.0f", 
+         main = paste(org, " DEG Matrix", sep = "")
+         )
+dev.print(pdf, paste("output/",org,"/DEG_matrix_heatmap_svalue.pdf", sep=""))
+
+## p-value matrix
+DEG.matrix.p <- create_DEG_matrix(org = org, ptest=T, svalue=0.005, pvalue=0.05, dds=deseq_data_3h11 )
+write.table(DEG.matrix.p$matrix, file=paste("output/",org,"/DEG_matrix_pvalue.txt", sep=""), sep="\t")
+write.table(DEG.matrix.p$updown, file=paste("output/",org,"/DEG_matrix_up_down_pvalues.txt", sep=""), sep="\t")
+pheatmap(mat=DEG.matrix.p$matrix,
+         cluster_rows = F, 
+         cluster_cols = F, 
+         display_numbers = T,
+         number_format = "%.0f", 
+         main = paste(org, " DEG Matrix", sep = "")
+         )
+dev.print(pdf, paste("output/",org,"/DEG_matrix_heatmap_pvalue.pdf", sep=""))
+```
+
+#### Heatmap of top 50 DEGs
+```{r echo=TRUE,dev=c('png'),message=FALSE,warning=FALSE,results='hide'}
+org="3H11"
+results_dir= paste("output/", org,"/summary_plots/", sep = "")
+dds.3h11 <- DESeq(deseq_data_3h11$dds)
+vsd.3h11 <- vst(dds.3h11, blind = F)
+plot_topn_heatmap(org = "3H11",n = 50,dds=dds.3h11, vsd=vsd.3h11)
+dev.print(pdf, paste(results_dir,"top50_DEG_heatmap.pdf",sep = ""))
+```
+
+#### PCA for all samples
+```{r echo=TRUE,dev=c('png')}
+org="3H11"
+results_dir= paste("output/", org,"/summary_plots/", sep = "")
+#dds.dv <- DESeq(deseq_data$dds.dv1)
+#vsd.dv <- vst(dds.dv, blind = F)
+plot_pca(org = "3H11",vsd = vsd.3h11)
+dev.print(pdf, paste(results_dir,"PCA_plot.pdf",sep = ""))
+```
+
+#### {-}
+
+### DEG analysis for R12
+```{r echo=TRUE, message=FALSE,warning=FALSE,results='hide'}
+cat("Started DEG analysis...\n")
+org = "R12"
+for(condition in conditions.r12){
+ degs.file <- paste("output/", org, "/DEG_tables_svalues/",condition,".txt", sep="")
+   degp.file <- paste("output/", org, "/DEG_tables_pvalues/",condition,".txt", sep="")
+   ## s-value analysis
+   if(fs::is_file(degs.file)){
+      cat("\t DEG analysis for ", condition, "exists, skipping \n")
+   }else{
+      cat("\t DEG analysis for ", condition, "does NOT exists, continuing \n")
+      deg_analysis(dds=deseq_data_r12$dds,condition=condition, lfc=1, write2file=T, org = org, ptest=F)
+   }
+   
+   ## p-value analysis
+   if(fs::is_file(degp.file)){
+      cat("\t DEG analysis for ", condition, "exists, skipping \n")
+   }else{
+      cat("\t DEG analysis for ", condition, "does NOT exists, continuing \n")
+      deg_analysis(dds=deseq_data_r12$dds,condition=condition, lfc=1, write2file=T, org = org, ptest=T)
+   }
+}
+```
+<p>DEG Results for all conditions are [here](`r paste("output/", org, "/DEG_tables_svalues/", sep="")`)</p>
+
+
+#### Volcano plots
+```{r echo=TRUE,message=FALSE,warning=FALSE,results='hide'}
+cat("Plotting volcano plots.\n")
+org = "R12"
+rerun = FALSE
+for(condition in conditions){
+   pdfs.file <- paste("output/",org,"/volcano_plots_svalues/",condition,"_volcano.pdf", sep="")
+   pdfp.file <- paste("output/",org,"/volcano_plots_pvalues/",condition,"_volcano.pdf", sep="")
+   
+   ## volcano plot for s-values
+   if(fs::is_file(pdfs.file) & rerun==FALSE){
+      cat("\t Volcano plot for ", condition, " for s-value exists, skipping \n")
+   }else{
+      cat("\t Volcano plot for ", condition, " for s-value does NOT exists, continuing \n")
+      pdf(file=pdfs.file)
+      volcano_plot(condition = condition, org=org, lfc=1, svalue=0.005,ptest=F)
+      dev.off()
+   }
+   
+   ## volcano plot for p-values
+   if(fs::is_file(pdfp.file) & rerun==FALSE){
+      cat("\t Volcano plot for ", condition, " for p-value exists, skipping \n")
+   }else{
+      cat("\t Volcano plot for ", condition, " for p-value does NOT exists, continuing \n")
+      pdf(file=pdfp.file)
+      volcano_plot(condition = condition, org="dvh", lfc=1, svalue=0.005,ptest=T,pvalue=0.05)
+      dev.off()
+   }
+}
+```
+<p>Volcano plots for all conditions are [here](`r paste("output/", org, "/volcano_plots_svalues/", sep="")`)</p>
+
+
+#### DEG Matrix
+```{r echo=TRUE,dev=c('png'),results='hide'}
+##### 4. create DEG matrix and write results into a file #####
+org="R12"
+
+## s-value matrix
+DEG.matrix.s <- create_DEG_matrix(org = org, ptest=F, svalue=0.005, dds=deseq_data_r12$dds)
+write.table(DEG.matrix.s$matrix, file=paste("output/",org,"/DEG_matrix_svalue.txt", sep=""), sep="\t")
+write.table(DEG.matrix.s$updown, file=paste("output/",org,"/DEG_matrix_up_down_svalues.txt", sep=""), sep="\t")
+pheatmap(mat=DEG.matrix.s$matrix,
+         cluster_rows = F, 
+         cluster_cols = F, 
+         display_numbers = T,
+         number_format = "%.0f", 
+         main = paste(org, " DEG Matrix", sep = "")
+         )
+dev.print(pdf, paste("output/",org,"/DEG_matrix_heatmap_svalue.pdf", sep=""))
+
+## p-value matrix
+DEG.matrix.p <- create_DEG_matrix(org = org, ptest=T, svalue=0.005, pvalue=0.05, dds=deseq_data_r12$dds )
+
+write.table(DEG.matrix.p$matrix, file=paste("output/",org,"/DEG_matrix_pvalue.txt", sep=""), sep="\t")
+
+write.table(DEG.matrix.p$updown, file=paste("output/",org,"/DEG_matrix_up_down_pvalues.txt", sep=""), sep="\t")
+pheatmap(mat=DEG.matrix.p$matrix,
+         cluster_rows = F, 
+         cluster_cols = F, 
+         display_numbers = T,
+         number_format = "%.0f", 
+         main = paste(org, " DEG Matrix", sep = "")
+         )
+dev.print(pdf, paste("output/",org,"/DEG_matrix_heatmap_pvalue.pdf", sep=""))
+```
+
+#### Heatmap of top 50 DEGs
+```{r echo=TRUE,dev=c('png'),message=FALSE,warning=FALSE,results='hide'}
+org="R12"
+results_dir= paste("output/", org,"/summary_plots/", sep = "")
+dds.r12 <- DESeq(deseq_data_r12$dds)
+vsd.r12 <- vst(dds.r12, blind = F)
+plot_topn_heatmap(org = "R12",n = 50, dds = dds.r12, vsd = vsd.r12)
+dev.print(pdf, paste(results_dir,"top50_DEG_heatmap.pdf",sep = ""))
+```
+
+#### PCA for all samples
+```{r echo=TRUE,dev=c('png')}
+org="R12"
+results_dir= paste("output/", org,"/summary_plots/", sep = "")
+#dds.mm <- DESeq(deseq_data$dds.mm1)
+plot_pca(org = org,vsd = vsd.r12)
+dev.print(pdf, paste(results_dir,"PCA_plot.pdf",sep = ""))
+```
+
+#### {-}
+
